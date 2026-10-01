@@ -6,49 +6,37 @@ import numpy as np
 import requests
 from dataclasses import dataclass, field
 
-# ─────────────────────────────────────────────
-# CONFIG
-# ─────────────────────────────────────────────
-
 JEV_API_KEY  = "sk_RPmtqkXQcQYf9V4qTql7WZgmjyRG-C7y7BLqNjo9fTA"
 JEV_ENDPOINT = "https://jevaimodel.net/v1/systemone"
 JEV_MODEL    = "typesafe/jev-1.13"
 
-DECISION_COLORS = {
-    "AUTO_FIX":               "#86BC25",
-    "MANUAL_CORRECTION":      "#E8A317",
-    "CONSULTANT_ESCALATION":  "#DA291C",
-    "NEEDS_MORE_INFO":        "#888888",
+DECISION_META = {
+    "AUTO_FIX":              {"color": "#86BC25", "bg": "#f0f8e8", "icon": "✅", "label": "Auto Fix"},
+    "MANUAL_CORRECTION":     {"color": "#E8A317", "bg": "#fff8ed", "icon": "⚠️", "label": "Manual Correction"},
+    "CONSULTANT_ESCALATION": {"color": "#DA291C", "bg": "#fff0ef", "icon": "🚨", "label": "Escalate to Consultant"},
+    "NEEDS_MORE_INFO":       {"color": "#888888", "bg": "#f5f5f5", "icon": "❓", "label": "Needs More Info"},
 }
-
-DECISION_ICONS = {
-    "AUTO_FIX":               "✅",
-    "MANUAL_CORRECTION":      "⚠️",
-    "CONSULTANT_ESCALATION":  "🚨",
-    "NEEDS_MORE_INFO":        "❓",
-}
-
-# ─────────────────────────────────────────────
-# KNOWLEDGE BASE
-# ─────────────────────────────────────────────
 
 ERROR_LIBRARY = {
-    "err_001": {"text": "Mandatory buyer electronic address or VAT identifier is missing or incorrectly formatted.", "error_category": "buyer_address",    "resolution_type": "manual_correction"},
-    "err_002": {"text": "Supplier postal address is incomplete — street name, city, or postal code tag is missing.", "error_category": "supplier_address",  "resolution_type": "manual_correction"},
-    "err_003": {"text": "Tax identifier syntax is invalid — VAT number does not match the required country format.", "error_category": "tax_identifier",    "resolution_type": "consultant_escalation"},
-    "err_004": {"text": "Invoice total amount does not match the sum of line item amounts — arithmetic mismatch.",   "error_category": "calculation_error", "resolution_type": "auto_fix"},
-    "err_005": {"text": "Tax category code is missing or not valid for the specified invoice type under ZATCA.",     "error_category": "tax_category",      "resolution_type": "consultant_escalation"},
-    "err_006": {"text": "Invoice issue date is missing or not in the required ISO 8601 format (YYYY-MM-DD).",       "error_category": "date_format",       "resolution_type": "auto_fix"},
-    "err_007": {"text": "Mandatory seller VAT registration number (BT-31) is absent from the invoice header.",     "error_category": "tax_identifier",    "resolution_type": "consultant_escalation"},
-    "err_008": {"text": "Currency code is missing or does not match an ISO 4217 standard code.",                   "error_category": "currency",          "resolution_type": "manual_correction"},
-    "err_009": {"text": "Payment means code is invalid or not supported for this e-invoicing compliance region.",  "error_category": "payment",           "resolution_type": "manual_correction"},
-    "err_010": {"text": "Line item unit price is zero or negative — likely a data entry or mapping error.",        "error_category": "calculation_error", "resolution_type": "auto_fix"},
+    "err_001": {"text": "Mandatory buyer electronic address or VAT identifier is missing or incorrectly formatted.", "error_category": "buyer_address",    "resolution_type": "MANUAL_CORRECTION"},
+    "err_002": {"text": "Supplier postal address is incomplete — street name, city, or postal code tag is missing.", "error_category": "supplier_address",  "resolution_type": "MANUAL_CORRECTION"},
+    "err_003": {"text": "Tax identifier syntax is invalid — VAT number does not match the required country format.", "error_category": "tax_identifier",    "resolution_type": "CONSULTANT_ESCALATION"},
+    "err_004": {"text": "Invoice total amount does not match the sum of line item amounts — arithmetic mismatch.",   "error_category": "calculation_error", "resolution_type": "AUTO_FIX"},
+    "err_005": {"text": "Tax category code is missing or not valid for the specified invoice type under ZATCA.",     "error_category": "tax_category",      "resolution_type": "CONSULTANT_ESCALATION"},
+    "err_006": {"text": "Invoice issue date is missing or not in the required ISO 8601 format (YYYY-MM-DD).",       "error_category": "date_format",       "resolution_type": "AUTO_FIX"},
+    "err_007": {"text": "Mandatory seller VAT registration number (BT-31) is absent from the invoice header.",     "error_category": "tax_identifier",    "resolution_type": "CONSULTANT_ESCALATION"},
+    "err_008": {"text": "Currency code is missing or does not match an ISO 4217 standard code.",                   "error_category": "currency",          "resolution_type": "MANUAL_CORRECTION"},
+    "err_009": {"text": "Payment means code is invalid or not supported for this e-invoicing compliance region.",  "error_category": "payment",           "resolution_type": "MANUAL_CORRECTION"},
+    "err_010": {"text": "Line item unit price is zero or negative — likely a data entry or mapping error.",        "error_category": "calculation_error", "resolution_type": "AUTO_FIX"},
 }
 
+# FIX 1: Expanded + more specific keyword signals to correctly separate
+# "total/sum mismatch" (err_004) from "unit price/line item" (err_010)
 KEYWORD_SIGNALS = {
     "address":     ["address", "postal", "street", "city", "buyer", "supplier", "electronic", "missing"],
     "tax":         ["tax", "vat", "taxid", "identifier", "registration", "syntax", "format", "zatca"],
-    "calculation": ["total", "amount", "sum", "line item", "mismatch", "zero", "negative", "arithmetic"],
+    "calculation": ["total", "amount", "sum", "mismatch", "arithmetic", "equal", "not equal"],
+    "line_item":   ["line item", "unit price", "zero", "negative", "price", "data entry"],
     "compliance":  ["code", "currency", "payment", "category", "iso", "mandatory", "invalid", "date"],
 }
 
@@ -60,13 +48,11 @@ SAMPLE_ERRORS = [
     "UBL-SR-01: Invoice issue date element is absent or malformed",
 ]
 
-# ─────────────────────────────────────────────
-# VECTOR ENGINE
-# ─────────────────────────────────────────────
+# ── Vector Engine ──────────────────────────────────────────
 
 def get_embedding(text: str) -> np.ndarray:
     text_lower = text.lower()
-    scores = np.zeros(4)
+    scores = np.zeros(5)   # now 5D to match expanded signals
     for i, kws in enumerate(KEYWORD_SIGNALS.values()):
         for kw in kws:
             if kw in text_lower:
@@ -87,7 +73,7 @@ def cosine_similarity(v1: np.ndarray, v2: np.ndarray) -> float:
     denom = np.linalg.norm(v1) * np.linalg.norm(v2)
     return float(np.dot(v1, v2) / denom) if denom > 0 else 0.0
 
-def semantic_search(error_input: str) -> list[dict]:
+def semantic_search(error_input: str) -> list:
     query_vec = get_embedding(error_input)
     results = []
     for err_id, err_data in ERROR_LIBRARY.items():
@@ -95,9 +81,34 @@ def semantic_search(error_input: str) -> list[dict]:
         results.append({"err_id": err_id, "score": score, **err_data})
     return sorted(results, key=lambda x: x["score"], reverse=True)
 
-# ─────────────────────────────────────────────
-# JEV API
-# ─────────────────────────────────────────────
+# ── FIX 2: Local fallback routing — used when Jev API is unreachable ──
+
+COMPLIANCE_CRITICAL_TYPES = {"CONSULTANT_ESCALATION"}
+COMPLIANCE_RISK_MAP = {
+    "AUTO_FIX":              0.30,
+    "MANUAL_CORRECTION":     0.60,
+    "CONSULTANT_ESCALATION": 0.92,
+    "NEEDS_MORE_INFO":       0.50,
+}
+
+def local_route(best: dict, sim_score: float) -> dict:
+    """
+    Derives routing decision purely from knowledge base metadata
+    when Jev API is unavailable. Used as offline fallback.
+    """
+    decision    = best.get("resolution_type", "NEEDS_MORE_INFO")
+    confidence  = round(min(0.55 + sim_score * 0.40, 0.97), 3)
+    is_critical = COMPLIANCE_RISK_MAP.get(decision, 0.5)
+    match_quality = round(min(sim_score * 1.05, 0.99), 3)
+    return {
+        "decision":     decision,
+        "confidence":   confidence,
+        "is_critical":  is_critical,
+        "match_quality": match_quality,
+        "mode":         "offline",
+    }
+
+# ── Jev API ────────────────────────────────────────────────
 
 @dataclass
 class JevResult:
@@ -109,45 +120,34 @@ class JevResult:
     human_readable_match: str
     is_critical: float
     match_quality: float
-    payload: dict = field(default_factory=dict)
+    mode: str = "jev_ai"          # "jev_ai" or "offline"
 
 def call_jev(raw_error: str, best: dict) -> JevResult:
-    state = f"""
-    Raw SAP DRC Error: "{raw_error}"
-    Closest known error [{best['err_id']}]: "{best['text']}"
-    """
     payload = {
         "model": JEV_MODEL,
-        "state": state,
+        "state": f'Raw SAP DRC Error: "{raw_error}"\nClosest known error [{best["err_id"]}]: "{best["text"]}"',
         "questions": {
             "routing_decision": {
                 "type": "choice",
                 "instructions": "What is the correct resolution action for this SAP DRC error?",
                 "criteria": {
-                    "AUTO_FIX":             "Formatting or calculation issue — can be corrected automatically",
-                    "MANUAL_CORRECTION":    "Requires a human to review and correct the invoice data",
-                    "CONSULTANT_ESCALATION":"Involves tax, VAT, or compliance rules needing expert review",
-                    "NEEDS_MORE_INFO":      "Ambiguous — cannot be resolved without additional context"
+                    "AUTO_FIX":             "Formatting or calculation issue correctable automatically",
+                    "MANUAL_CORRECTION":    "Requires human review and correction",
+                    "CONSULTANT_ESCALATION":"Involves tax/VAT/compliance rules needing expert review",
+                    "NEEDS_MORE_INFO":      "Ambiguous — needs additional context"
                 }
             },
-            "is_compliance_critical": {
-                "type": "noul",
-                "instructions": "This error would cause invoice rejection by the tax authority if not resolved."
-            },
-            "is_good_match": {
-                "type": "noul",
-                "instructions": "The knowledge base description is a good human-readable translation of the raw SAP error."
-            }
+            "is_compliance_critical": {"type": "noul", "instructions": "This error would cause invoice rejection by the tax authority."},
+            "is_good_match":          {"type": "noul", "instructions": "The knowledge base description is a good translation of the raw SAP error."}
         }
     }
     try:
-        response = requests.post(
-            JEV_ENDPOINT, json=payload,
-            headers={"Authorization": f"Bearer {JEV_API_KEY}", "Content-Type": "application/json"}
-        )
-        response.raise_for_status()
-        answers    = response.json().get("data", {}).get("result", {}).get("answers", {})
-        routing    = answers.get("routing_decision", {})
+        r = requests.post(JEV_ENDPOINT, json=payload,
+            headers={"Authorization": f"Bearer {JEV_API_KEY}", "Content-Type": "application/json"},
+            timeout=8)
+        r.raise_for_status()
+        answers = r.json().get("data", {}).get("result", {}).get("answers", {})
+        routing = answers.get("routing_decision", {})
         return JevResult(
             decision=routing.get("choice", "NEEDS_MORE_INFO"),
             confidence=round(routing.get("confidence", 0.0), 3),
@@ -157,155 +157,256 @@ def call_jev(raw_error: str, best: dict) -> JevResult:
             human_readable_match=best["text"],
             is_critical=round(answers.get("is_compliance_critical", {}).get("noul", 0.0), 3),
             match_quality=round(answers.get("is_good_match", {}).get("noul", 0.0), 3),
+            mode="jev_ai",
         )
-    except Exception as e:
+    except Exception:
+        # FIX 2: Jev unreachable → fall back to local routing silently
+        r = local_route(best, best["score"])
         return JevResult(
-            decision="NEEDS_MORE_INFO", confidence=0.0,
-            error_category="unknown", resolution_type="unknown",
-            matched_err_id="none", human_readable_match=str(e),
-            is_critical=0.0, match_quality=0.0,
+            decision=r["decision"],
+            confidence=r["confidence"],
+            error_category=best.get("error_category", "unknown"),
+            resolution_type=best.get("resolution_type", "unknown"),
+            matched_err_id=best["err_id"],
+            human_readable_match=best["text"],
+            is_critical=r["is_critical"],
+            match_quality=r["match_quality"],
+            mode="offline",
         )
 
-# ─────────────────────────────────────────────
-# STREAMLIT UI
-# ─────────────────────────────────────────────
+# ── HTML helpers ───────────────────────────────────────────
 
-st.set_page_config(page_title="SAP DRC Error Translator", page_icon="🧾", layout="wide")
+def html(content: str):
+    st.markdown(content, unsafe_allow_html=True)
+
+def step_header(step: str, title: str):
+    html(f"""
+    <div style="margin-bottom:8px;">
+        <span style="background:#282728;color:#86BC25;border-radius:20px;
+                     padding:2px 10px;font-size:11px;font-weight:700;">{step}</span>
+        <span style="font-size:13px;font-weight:600;color:#282728;
+                     margin-left:8px;">{title}</span>
+    </div>""")
+
+def sim_bar(err_id, text, score, is_top):
+    pct   = int(score * 100)
+    color = "#86BC25" if is_top else "#d0d0d0"
+    badge = (' <span style="background:#86BC25;color:white;font-size:10px;'
+             'padding:1px 6px;border-radius:4px;font-weight:700;">TOP</span>'
+             if is_top else "")
+    html(f"""
+    <div style="margin-bottom:10px;">
+        <div style="font-size:12px;color:#555;margin-bottom:3px;">
+            [{err_id}] {text[:55]}...{badge}
+        </div>
+        <div style="background:#eee;border-radius:6px;height:10px;overflow:hidden;">
+            <div style="background:{color};width:{pct}%;height:10px;border-radius:6px;"></div>
+        </div>
+        <div style="font-size:11px;color:#888;margin-top:2px;">{score:.4f}</div>
+    </div>""")
+
+def metric_tile(label, value, color="#1a1a1a"):
+    html(f"""
+    <div style="background:white;border-radius:10px;padding:14px;text-align:center;
+                box-shadow:0 2px 6px rgba(0,0,0,0.05);">
+        <div style="font-size:10px;color:#888;text-transform:uppercase;
+                    letter-spacing:1px;margin-bottom:4px;">{label}</div>
+        <div style="font-size:26px;font-weight:800;color:{color};">{value}</div>
+    </div>""")
+
+# ── Page Config ────────────────────────────────────────────
+
+st.set_page_config(page_title="SAP DRC | Error Translator", page_icon="🧾", layout="wide")
 
 st.markdown("""
-    <style>
-        .main { background-color: #f5f5f5; }
-        .block-container { padding-top: 2rem; }
-        .stTextArea textarea { font-family: monospace; font-size: 14px; }
-        .card {
-            background: white; border-radius: 8px;
-            padding: 1.2rem 1.5rem; margin-bottom: 1rem;
-            border-left: 5px solid #86BC25;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-        }
-        .card-red   { border-left-color: #DA291C !important; }
-        .card-amber { border-left-color: #E8A317 !important; }
-        .card-grey  { border-left-color: #888888 !important; }
-        .label { font-size: 11px; font-weight: 700; color: #888; text-transform: uppercase; letter-spacing: 1px; }
-        .value { font-size: 15px; font-weight: 600; color: #1a1a1a; margin-top: 2px; }
-        .badge {
-            display: inline-block; padding: 3px 10px; border-radius: 20px;
-            font-size: 12px; font-weight: 700; color: white;
-        }
-    </style>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700;800&display=swap');
+html, body, [class*="css"] { font-family: 'Open Sans', sans-serif; }
+.main { background: #f4f5f7; }
+.block-container { padding: 0 2rem 2rem; max-width: 1200px; }
+.stButton > button {
+    background: #86BC25 !important; color: white !important;
+    font-weight: 700 !important; font-size: 15px !important;
+    border: none !important; border-radius: 8px !important;
+    padding: 0.6rem 1rem !important; width: 100%;
+    transition: background 150ms;
+}
+.stButton > button:hover { background: #6B9A1E !important; }
+div[data-testid="stSelectbox"] label,
+div[data-testid="stTextArea"] label {
+    font-size: 11px !important; font-weight: 700 !important;
+    color: #888 !important; text-transform: uppercase; letter-spacing: 1px !important;
+}
+</style>
 """, unsafe_allow_html=True)
 
-# Header
-st.markdown("""
-    <div style="background:#282728; padding:1.2rem 2rem; border-radius:8px; margin-bottom:1.5rem;">
-        <span style="color:#86BC25; font-size:22px; font-weight:800;">SAP DRC</span>
-        <span style="color:white; font-size:22px; font-weight:300;"> | Error Translation & Routing</span>
-        <p style="color:#aaa; margin:4px 0 0; font-size:13px;">Powered by RAG + Jev AI</p>
+# ── Header ─────────────────────────────────────────────────
+
+html("""
+<div style="background:linear-gradient(135deg,#1a1a1a 0%,#282728 100%);
+            padding:1.5rem 2rem;border-radius:12px;margin-bottom:1.5rem;
+            display:flex;align-items:center;justify-content:space-between;">
+    <div>
+        <div style="color:white;font-size:22px;font-weight:800;">
+            <span style="color:#86BC25;">SAP DRC</span>&nbsp; Error Translation &amp; Routing
+        </div>
+        <div style="color:#aaa;font-size:12px;margin-top:4px;">
+            Powered by RAG Vector Engine + Jev AI Model
+        </div>
     </div>
-""", unsafe_allow_html=True)
+    <div style="background:#86BC25;color:white;padding:6px 16px;
+                border-radius:20px;font-size:12px;font-weight:700;">&#9679; Live</div>
+</div>""")
 
-col_input, col_output = st.columns([1, 1], gap="large")
+# ── Layout ─────────────────────────────────────────────────
 
-with col_input:
-    st.markdown("#### Enter SAP DRC Error")
-    selected = st.selectbox("Or pick a sample error:", ["-- type your own --"] + SAMPLE_ERRORS)
-    default  = "" if selected == "-- type your own --" else selected
-    raw_error = st.text_area("Raw error string:", value=default, height=100, placeholder="e.g. BR-KSA-05: Buyer VAT missing...")
+left, right = st.columns([1, 1.1], gap="large")
 
-    run = st.button("Translate & Route", type="primary", use_container_width=True)
+with left:
+    html('<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">Input</div>')
+    selected  = st.selectbox("Sample Errors", ["— type your own —"] + SAMPLE_ERRORS)
+    default   = "" if selected == "— type your own —" else selected
+    raw_error = st.text_area("Raw SAP DRC Error String", value=default, height=90,
+                              placeholder="e.g. BR-KSA-05: Buyer VAT missing...")
+    run = st.button("⚡  Translate & Route", use_container_width=True)
 
     if run and raw_error.strip():
-        # Vector process inside expander
-        with st.expander("Vector Translation Process", expanded=True):
-            candidates = semantic_search(raw_error)
-            best = candidates[0]
+        candidates = semantic_search(raw_error)
+        best = candidates[0]
+        hits = get_keyword_hits(raw_error)
+        vec  = get_embedding(raw_error)
+        dims = list(KEYWORD_SIGNALS.keys())
 
-            st.markdown("**Step 1 — Keywords Detected**")
-            hits = get_keyword_hits(raw_error)
+        html('<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:1.5px;margin:16px 0 8px;">Vector Translation Process</div>')
+
+        # Step 1 — Keywords
+        with st.container():
+            html("""<div style="background:white;border-radius:10px;padding:14px 16px;
+                               margin-bottom:10px;box-shadow:0 2px 6px rgba(0,0,0,0.05);">""")
+            step_header("Step 1", "Keywords Detected")
             if hits:
-                for dim, words in hits.items():
-                    st.markdown(f"- `{dim}` → **{', '.join(words)}**")
+                tags = " ".join(
+                    f'<span style="display:inline-block;background:#f0f8e8;border:1px solid #86BC25;'
+                    f'border-radius:6px;padding:3px 10px;margin:2px;font-size:12px;">'
+                    f'<b>{dim}</b>: {", ".join(words)}</span>'
+                    for dim, words in hits.items()
+                )
+                html(f"<div>{tags}</div>")
             else:
                 st.warning("No strong keyword signals — match confidence may be low.")
+            html("</div>")
 
-            st.markdown("**Step 2 — Input Vector**")
-            vec = get_embedding(raw_error)
-            dims = list(KEYWORD_SIGNALS.keys())
-            vec_cols = st.columns(4)
-            for i, col in enumerate(vec_cols):
+        # Step 2 — Vector
+        with st.container():
+            html("""<div style="background:white;border-radius:10px;padding:14px 16px;
+                               margin-bottom:10px;box-shadow:0 2px 6px rgba(0,0,0,0.05);">""")
+            step_header("Step 2", f"Input Vector ({len(dims)}D)")
+            cols = st.columns(len(dims))
+            for i, col in enumerate(cols):
                 col.metric(dims[i], f"{vec[i]:.3f}")
+            html("</div>")
 
-            st.markdown("**Step 3 — Similarity Scores**")
-            for entry in candidates[:5]:
-                bar_pct = int(entry["score"] * 100)
-                is_best = entry["err_id"] == best["err_id"]
-                color   = "#86BC25" if is_best else "#ccc"
-                label   = f"[{entry['err_id']}] {entry['text'][:55]}..."
-                st.markdown(f"""
-                    <div style="margin-bottom:6px;">
-                        <div style="font-size:12px; color:#555;">{label}</div>
-                        <div style="background:#eee; border-radius:4px; height:10px; width:100%;">
-                            <div style="background:{color}; width:{bar_pct}%; height:10px; border-radius:4px;"></div>
-                        </div>
-                        <div style="font-size:11px; color:#888;">{entry['score']:.4f}</div>
-                    </div>
-                """, unsafe_allow_html=True)
+        # Step 3 — Similarity Bars
+        html("""<div style="background:white;border-radius:10px;padding:14px 16px;
+                            box-shadow:0 2px 6px rgba(0,0,0,0.05);">""")
+        step_header("Step 3", "Similarity Scores")
+        for entry in candidates[:5]:
+            sim_bar(entry["err_id"], entry["text"], entry["score"],
+                    entry["err_id"] == best["err_id"])
+        html("</div>")
 
-        # Store for output col
         st.session_state["candidates"] = candidates
         st.session_state["raw_error"]  = raw_error
         st.session_state["jev_result"] = call_jev(raw_error, best)
 
-with col_output:
-    st.markdown("#### Translation & Routing Result")
+with right:
+    html('<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">Result</div>')
 
     if "jev_result" in st.session_state:
-        result: JevResult = st.session_state["jev_result"]
-        color  = DECISION_COLORS.get(result.decision, "#888")
-        icon   = DECISION_ICONS.get(result.decision, "❓")
-        card_class = {
-            "CONSULTANT_ESCALATION": "card-red",
-            "MANUAL_CORRECTION":     "card-amber",
-            "NEEDS_MORE_INFO":       "card-grey",
-        }.get(result.decision, "")
+        result = st.session_state["jev_result"]
+        meta   = DECISION_META.get(result.decision, DECISION_META["NEEDS_MORE_INFO"])
+        is_offline = result.mode == "offline"
 
-        # Human-readable translation
-        st.markdown(f"""
-            <div class="card">
-                <div class="label">Human-Readable Translation</div>
-                <div class="value">{result.human_readable_match}</div>
-                <div style="margin-top:8px;">
-                    <span style="font-size:12px; color:#888;">Category: </span>
-                    <span style="font-size:12px; font-weight:600;">{result.error_category.replace('_',' ').title()}</span>
-                    &nbsp;&nbsp;
-                    <span style="font-size:12px; color:#888;">Matched: </span>
-                    <span style="font-size:12px; font-weight:600;">{result.matched_err_id}</span>
+        # Offline notice
+        if is_offline:
+            st.info("ℹ️ Jev API unreachable — routing derived from vector match metadata.")
+
+        # Raw vs Translated
+        html(f"""
+        <div style="background:white;border-left:5px solid #86BC25;border-radius:10px;
+                    padding:1.2rem 1.5rem;margin-bottom:12px;box-shadow:0 2px 6px rgba(0,0,0,0.05);">
+            <div style="display:flex;gap:16px;">
+                <div style="flex:1;border-right:1px solid #eee;padding-right:16px;">
+                    <div style="font-size:10px;color:#888;text-transform:uppercase;
+                                letter-spacing:1px;margin-bottom:6px;">Raw SAP Error</div>
+                    <div style="font-family:monospace;font-size:12px;color:#555;line-height:1.6;">
+                        {st.session_state['raw_error']}
+                    </div>
+                </div>
+                <div style="flex:1;">
+                    <div style="font-size:10px;color:#888;text-transform:uppercase;
+                                letter-spacing:1px;margin-bottom:6px;">&#8594; Translation</div>
+                    <div style="font-size:14px;font-weight:600;color:#1a1a1a;line-height:1.6;">
+                        {result.human_readable_match}
+                    </div>
+                    <div style="margin-top:8px;">
+                        <span style="background:#f0f8e8;border:1px solid #86BC25;border-radius:4px;
+                                     padding:2px 8px;font-size:11px;color:#555;">
+                            {result.error_category.replace('_', ' ').title()}
+                        </span>
+                        &nbsp;
+                        <span style="background:#f5f5f5;border-radius:4px;
+                                     padding:2px 8px;font-size:11px;color:#555;">
+                            {result.matched_err_id}
+                        </span>
+                    </div>
                 </div>
             </div>
-        """, unsafe_allow_html=True)
+        </div>""")
 
         # Jev Decision
-        st.markdown(f"""
-            <div class="card {card_class}">
-                <div class="label">Jev Routing Decision</div>
-                <div style="font-size:22px; font-weight:800; color:{color}; margin-top:4px;">
-                    {icon} {result.decision.replace('_',' ')}
-                </div>
+        mode_label = (
+            '<span style="font-size:11px;color:#888;margin-left:10px;">(vector fallback)</span>'
+            if is_offline else
+            '<span style="font-size:11px;color:#86BC25;margin-left:10px;">&#9679; Jev AI</span>'
+        )
+        html(f"""
+        <div style="background:{meta['bg']};border:2px solid {meta['color']};
+                    border-radius:10px;padding:1.2rem 1.5rem;margin-bottom:12px;">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;
+                        letter-spacing:1px;margin-bottom:6px;">
+                Routing Decision {mode_label}
             </div>
-        """, unsafe_allow_html=True)
+            <div style="font-size:26px;font-weight:800;color:{meta['color']};">
+                {meta['icon']} &nbsp;{meta['label']}
+            </div>
+        </div>""")
 
-        # Scores
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Jev Confidence",       f"{result.confidence * 100:.0f}%")
-        m2.metric("Compliance Critical",  f"{result.is_critical * 100:.0f}%")
-        m3.metric("Match Quality",        f"{result.match_quality * 100:.0f}%")
+        # Score Tiles
+        risk_color = (
+            "#DA291C" if result.is_critical >= 0.8
+            else "#E8A317" if result.is_critical >= 0.5
+            else "#86BC25"
+        )
+        c1, c2, c3 = st.columns(3)
+        with c1: metric_tile("Confidence",     f"{int(result.confidence    * 100)}%")
+        with c2: metric_tile("Compliance Risk", f"{int(result.is_critical   * 100)}%", risk_color)
+        with c3: metric_tile("Match Quality",   f"{int(result.match_quality * 100)}%")
 
-        # Critical warning
+        st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
         if result.is_critical >= 0.8:
-            st.error("This error will cause invoice rejection by the tax authority if not resolved.")
+            st.error("🚨 **Invoice rejection risk** — resolve before submission to the tax authority.")
         elif result.is_critical >= 0.5:
-            st.warning("This error may impact invoice compliance — review recommended.")
+            st.warning("⚠️ **Compliance risk detected** — review recommended before submission.")
         else:
-            st.success("Low compliance risk — standard processing applies.")
+            st.success("✅ **Low compliance risk** — standard processing applies.")
     else:
-        st.info("Enter an error on the left and click **Translate & Route** to see results here.")
+        html("""
+        <div style="background:white;border-radius:10px;padding:3rem 2rem;
+                    text-align:center;box-shadow:0 2px 6px rgba(0,0,0,0.05);">
+            <div style="font-size:40px;margin-bottom:12px;">🧾</div>
+            <div style="font-size:15px;font-weight:600;color:#555;">No error analysed yet</div>
+            <div style="font-size:13px;color:#aaa;margin-top:4px;">
+                Enter a SAP DRC error on the left and click Translate &amp; Route
+            </div>
+        </div>""")
