@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 # CONFIG
 # ─────────────────────────────────────────────
 
-JEV_API_KEY  = "sk_18ztYamfADXN7NC2rPMo-f-XxI-d68F57XT-XBG4bo0"
+JEV_API_KEY  = "sk_RPmtqkXQcQYf9V4qTql7WZgmjyRG-C7y7BLqNjo9fTA"
 JEV_ENDPOINT = "https://jevaimodel.net/v1/systemone"
 JEV_MODEL    = "typesafe/jev-1.13"
 
