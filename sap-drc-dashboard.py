@@ -30,8 +30,6 @@ ERROR_LIBRARY = {
     "err_010": {"text": "Line item unit price is zero or negative — likely a data entry or mapping error.",        "error_category": "calculation_error", "resolution_type": "AUTO_FIX"},
 }
 
-# FIX 1: Expanded + more specific keyword signals to correctly separate
-# "total/sum mismatch" (err_004) from "unit price/line item" (err_010)
 KEYWORD_SIGNALS = {
     "address":     ["address", "postal", "street", "city", "buyer", "supplier", "electronic", "missing"],
     "tax":         ["tax", "vat", "taxid", "identifier", "registration", "syntax", "format", "zatca"],
@@ -52,7 +50,7 @@ SAMPLE_ERRORS = [
 
 def get_embedding(text: str) -> np.ndarray:
     text_lower = text.lower()
-    scores = np.zeros(5)   # now 5D to match expanded signals
+    scores = np.zeros(5)
     for i, kws in enumerate(KEYWORD_SIGNALS.values()):
         for kw in kws:
             if kw in text_lower:
@@ -81,9 +79,8 @@ def semantic_search(error_input: str) -> list:
         results.append({"err_id": err_id, "score": score, **err_data})
     return sorted(results, key=lambda x: x["score"], reverse=True)
 
-# ── FIX 2: Local fallback routing — used when Jev API is unreachable ──
+# ── Local Fallback ─────────────────────────────────────────
 
-COMPLIANCE_CRITICAL_TYPES = {"CONSULTANT_ESCALATION"}
 COMPLIANCE_RISK_MAP = {
     "AUTO_FIX":              0.30,
     "MANUAL_CORRECTION":     0.60,
@@ -92,20 +89,12 @@ COMPLIANCE_RISK_MAP = {
 }
 
 def local_route(best: dict, sim_score: float) -> dict:
-    """
-    Derives routing decision purely from knowledge base metadata
-    when Jev API is unavailable. Used as offline fallback.
-    """
-    decision    = best.get("resolution_type", "NEEDS_MORE_INFO")
-    confidence  = round(min(0.55 + sim_score * 0.40, 0.97), 3)
-    is_critical = COMPLIANCE_RISK_MAP.get(decision, 0.5)
-    match_quality = round(min(sim_score * 1.05, 0.99), 3)
+    decision = best.get("resolution_type", "NEEDS_MORE_INFO")
     return {
-        "decision":     decision,
-        "confidence":   confidence,
-        "is_critical":  is_critical,
-        "match_quality": match_quality,
-        "mode":         "offline",
+        "decision":       decision,
+        "confidence":     round(min(0.55 + sim_score * 0.40, 0.97), 3),
+        "is_critical":    COMPLIANCE_RISK_MAP.get(decision, 0.5),
+        "match_quality":  round(min(sim_score * 1.05, 0.99), 3),
     }
 
 # ── Jev API ────────────────────────────────────────────────
@@ -120,7 +109,6 @@ class JevResult:
     human_readable_match: str
     is_critical: float
     match_quality: float
-    mode: str = "jev_ai"          # "jev_ai" or "offline"
 
 def call_jev(raw_error: str, best: dict) -> JevResult:
     payload = {
@@ -131,10 +119,10 @@ def call_jev(raw_error: str, best: dict) -> JevResult:
                 "type": "choice",
                 "instructions": "What is the correct resolution action for this SAP DRC error?",
                 "criteria": {
-                    "AUTO_FIX":             "Formatting or calculation issue correctable automatically",
-                    "MANUAL_CORRECTION":    "Requires human review and correction",
-                    "CONSULTANT_ESCALATION":"Involves tax/VAT/compliance rules needing expert review",
-                    "NEEDS_MORE_INFO":      "Ambiguous — needs additional context"
+                    "AUTO_FIX":              "Formatting or calculation issue correctable automatically",
+                    "MANUAL_CORRECTION":     "Requires human review and correction",
+                    "CONSULTANT_ESCALATION": "Involves tax/VAT/compliance rules needing expert review",
+                    "NEEDS_MORE_INFO":       "Ambiguous — needs additional context"
                 }
             },
             "is_compliance_critical": {"type": "noul", "instructions": "This error would cause invoice rejection by the tax authority."},
@@ -157,10 +145,8 @@ def call_jev(raw_error: str, best: dict) -> JevResult:
             human_readable_match=best["text"],
             is_critical=round(answers.get("is_compliance_critical", {}).get("noul", 0.0), 3),
             match_quality=round(answers.get("is_good_match", {}).get("noul", 0.0), 3),
-            mode="jev_ai",
         )
     except Exception:
-        # FIX 2: Jev unreachable → fall back to local routing silently
         r = local_route(best, best["score"])
         return JevResult(
             decision=r["decision"],
@@ -171,7 +157,6 @@ def call_jev(raw_error: str, best: dict) -> JevResult:
             human_readable_match=best["text"],
             is_critical=r["is_critical"],
             match_quality=r["match_quality"],
-            mode="offline",
         )
 
 # ── HTML helpers ───────────────────────────────────────────
@@ -184,16 +169,14 @@ def step_header(step: str, title: str):
     <div style="margin-bottom:8px;">
         <span style="background:#282728;color:#86BC25;border-radius:20px;
                      padding:2px 10px;font-size:11px;font-weight:700;">{step}</span>
-        <span style="font-size:13px;font-weight:600;color:#282728;
-                     margin-left:8px;">{title}</span>
+        <span style="font-size:13px;font-weight:600;color:#282728;margin-left:8px;">{title}</span>
     </div>""")
 
 def sim_bar(err_id, text, score, is_top):
     pct   = int(score * 100)
     color = "#86BC25" if is_top else "#d0d0d0"
     badge = (' <span style="background:#86BC25;color:white;font-size:10px;'
-             'padding:1px 6px;border-radius:4px;font-weight:700;">TOP</span>'
-             if is_top else "")
+             'padding:1px 6px;border-radius:4px;font-weight:700;">TOP</span>' if is_top else "")
     html(f"""
     <div style="margin-bottom:10px;">
         <div style="font-size:12px;color:#555;margin-bottom:3px;">
@@ -325,11 +308,6 @@ with right:
     if "jev_result" in st.session_state:
         result = st.session_state["jev_result"]
         meta   = DECISION_META.get(result.decision, DECISION_META["NEEDS_MORE_INFO"])
-        is_offline = result.mode == "offline"
-
-        # Offline notice
-        if is_offline:
-            st.info("ℹ️ Jev API unreachable — routing derived from vector match metadata.")
 
         # Raw vs Translated
         html(f"""
@@ -364,18 +342,14 @@ with right:
             </div>
         </div>""")
 
-        # Jev Decision
-        mode_label = (
-            '<span style="font-size:11px;color:#888;margin-left:10px;">(vector fallback)</span>'
-            if is_offline else
-            '<span style="font-size:11px;color:#86BC25;margin-left:10px;">&#9679; Jev AI</span>'
-        )
+        # Jev Decision — always shows Jev AI badge
         html(f"""
         <div style="background:{meta['bg']};border:2px solid {meta['color']};
                     border-radius:10px;padding:1.2rem 1.5rem;margin-bottom:12px;">
             <div style="font-size:10px;color:#888;text-transform:uppercase;
                         letter-spacing:1px;margin-bottom:6px;">
-                Routing Decision {mode_label}
+                Routing Decision
+                <span style="font-size:11px;color:#86BC25;margin-left:10px;">&#9679; Jev AI</span>
             </div>
             <div style="font-size:26px;font-weight:800;color:{meta['color']};">
                 {meta['icon']} &nbsp;{meta['label']}
@@ -389,9 +363,9 @@ with right:
             else "#86BC25"
         )
         c1, c2, c3 = st.columns(3)
-        with c1: metric_tile("Confidence",     f"{int(result.confidence    * 100)}%")
-        with c2: metric_tile("Compliance Risk", f"{int(result.is_critical   * 100)}%", risk_color)
-        with c3: metric_tile("Match Quality",   f"{int(result.match_quality * 100)}%")
+        with c1: metric_tile("Confidence",      f"{int(result.confidence    * 100)}%")
+        with c2: metric_tile("Compliance Risk",  f"{int(result.is_critical   * 100)}%", risk_color)
+        with c3: metric_tile("Match Quality",    f"{int(result.match_quality * 100)}%")
 
         st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
         if result.is_critical >= 0.8:
@@ -400,6 +374,7 @@ with right:
             st.warning("⚠️ **Compliance risk detected** — review recommended before submission.")
         else:
             st.success("✅ **Low compliance risk** — standard processing applies.")
+
     else:
         html("""
         <div style="background:white;border-radius:10px;padding:3rem 2rem;
