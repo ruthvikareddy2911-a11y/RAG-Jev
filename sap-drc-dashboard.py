@@ -91,10 +91,10 @@ COMPLIANCE_RISK_MAP = {
 def local_route(best: dict, sim_score: float) -> dict:
     decision = best.get("resolution_type", "NEEDS_MORE_INFO")
     return {
-        "decision":       decision,
-        "confidence":     round(min(0.55 + sim_score * 0.40, 0.97), 3),
-        "is_critical":    COMPLIANCE_RISK_MAP.get(decision, 0.5),
-        "match_quality":  round(min(sim_score * 1.05, 0.99), 3),
+        "decision":      decision,
+        "confidence":    round(min(0.55 + sim_score * 0.40, 0.97), 3),
+        "is_critical":   COMPLIANCE_RISK_MAP.get(decision, 0.5),
+        "match_quality": round(min(sim_score * 1.05, 0.99), 3),
     }
 
 # ── Jev API ────────────────────────────────────────────────
@@ -169,14 +169,16 @@ def step_header(step: str, title: str):
     <div style="margin-bottom:8px;">
         <span style="background:#282728;color:#86BC25;border-radius:20px;
                      padding:2px 10px;font-size:11px;font-weight:700;">{step}</span>
-        <span style="font-size:13px;font-weight:600;color:#282728;margin-left:8px;">{title}</span>
+        <span style="font-size:13px;font-weight:600;color:#282728;
+                     margin-left:8px;">{title}</span>
     </div>""")
 
 def sim_bar(err_id, text, score, is_top):
     pct   = int(score * 100)
     color = "#86BC25" if is_top else "#d0d0d0"
     badge = (' <span style="background:#86BC25;color:white;font-size:10px;'
-             'padding:1px 6px;border-radius:4px;font-weight:700;">TOP</span>' if is_top else "")
+             'padding:1px 6px;border-radius:4px;font-weight:700;">TOP</span>'
+             if is_top else "")
     html(f"""
     <div style="margin-bottom:10px;">
         <div style="font-size:12px;color:#555;margin-bottom:3px;">
@@ -206,7 +208,7 @@ st.markdown("""
 @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700;800&display=swap');
 html, body, [class*="css"] { font-family: 'Open Sans', sans-serif; }
 .main { background: #f4f5f7; }
-.block-container { padding: 0 2rem 2rem; max-width: 1200px; }
+.block-container { padding: 1.5rem 2rem 2rem; max-width: 1200px; }
 .stButton > button {
     background: #86BC25 !important; color: white !important;
     font-weight: 700 !important; font-size: 15px !important;
@@ -223,22 +225,26 @@ div[data-testid="stTextArea"] label {
 </style>
 """, unsafe_allow_html=True)
 
-# ── Header ─────────────────────────────────────────────────
+# ── Header — FIX 1: flex-wrap so title never hides ────────
 
 html("""
 <div style="background:linear-gradient(135deg,#1a1a1a 0%,#282728 100%);
-            padding:1.5rem 2rem;border-radius:12px;margin-bottom:1.5rem;
-            display:flex;align-items:center;justify-content:space-between;">
-    <div>
-        <div style="color:white;font-size:22px;font-weight:800;">
-            <span style="color:#86BC25;">SAP DRC</span>&nbsp; Error Translation &amp; Routing
+            padding:1.5rem 2rem;border-radius:12px;margin-bottom:1.5rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;
+                flex-wrap:wrap;gap:10px;">
+        <div>
+            <div style="color:white;font-size:20px;font-weight:800;line-height:1.3;">
+                <span style="color:#86BC25;">SAP DRC</span>&nbsp;
+                Error Translation &amp; Routing
+            </div>
+            <div style="color:#aaa;font-size:12px;margin-top:4px;">
+                Powered by RAG Vector Engine + Jev AI Model
+            </div>
         </div>
-        <div style="color:#aaa;font-size:12px;margin-top:4px;">
-            Powered by RAG Vector Engine + Jev AI Model
-        </div>
+        <div style="background:#86BC25;color:white;padding:6px 16px;
+                    border-radius:20px;font-size:12px;font-weight:700;
+                    white-space:nowrap;">&#9679; Live</div>
     </div>
-    <div style="background:#86BC25;color:white;padding:6px 16px;
-                border-radius:20px;font-size:12px;font-weight:700;">&#9679; Live</div>
 </div>""")
 
 # ── Layout ─────────────────────────────────────────────────
@@ -247,10 +253,17 @@ left, right = st.columns([1, 1.1], gap="large")
 
 with left:
     html('<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">Input</div>')
-    selected  = st.selectbox("Sample Errors", ["— type your own —"] + SAMPLE_ERRORS)
-    default   = "" if selected == "— type your own —" else selected
-    raw_error = st.text_area("Raw SAP DRC Error String", value=default, height=90,
-                              placeholder="e.g. BR-KSA-05: Buyer VAT missing...")
+
+    selected = st.selectbox("Sample Errors", ["— type your own —"] + SAMPLE_ERRORS)
+
+    # FIX 2: empty box when "type your own", pre-filled only for real samples
+    if selected == "— type your own —":
+        raw_error = st.text_area("Raw SAP DRC Error String", value="",
+                                  height=90, placeholder="e.g. BR-KSA-05: Buyer VAT missing...")
+    else:
+        raw_error = st.text_area("Raw SAP DRC Error String", value=selected,
+                                  height=90, placeholder="e.g. BR-KSA-05: Buyer VAT missing...")
+
     run = st.button("⚡  Translate & Route", use_container_width=True)
 
     if run and raw_error.strip():
@@ -260,7 +273,8 @@ with left:
         vec  = get_embedding(raw_error)
         dims = list(KEYWORD_SIGNALS.keys())
 
-        html('<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:1.5px;margin:16px 0 8px;">Vector Translation Process</div>')
+        html('<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;'
+             'letter-spacing:1.5px;margin:16px 0 8px;">Vector Translation Process</div>')
 
         # Step 1 — Keywords
         with st.container():
@@ -274,7 +288,7 @@ with left:
                     f'<b>{dim}</b>: {", ".join(words)}</span>'
                     for dim, words in hits.items()
                 )
-                html(f"<div>{tags}</div>")
+                html(f"<div style='margin-top:4px;'>{tags}</div>")
             else:
                 st.warning("No strong keyword signals — match confidence may be low.")
             html("</div>")
@@ -303,7 +317,8 @@ with left:
         st.session_state["jev_result"] = call_jev(raw_error, best)
 
 with right:
-    html('<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">Result</div>')
+    html('<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;'
+         'letter-spacing:1.5px;margin-bottom:8px;">Result</div>')
 
     if "jev_result" in st.session_state:
         result = st.session_state["jev_result"]
@@ -312,7 +327,8 @@ with right:
         # Raw vs Translated
         html(f"""
         <div style="background:white;border-left:5px solid #86BC25;border-radius:10px;
-                    padding:1.2rem 1.5rem;margin-bottom:12px;box-shadow:0 2px 6px rgba(0,0,0,0.05);">
+                    padding:1.2rem 1.5rem;margin-bottom:12px;
+                    box-shadow:0 2px 6px rgba(0,0,0,0.05);">
             <div style="display:flex;gap:16px;">
                 <div style="flex:1;border-right:1px solid #eee;padding-right:16px;">
                     <div style="font-size:10px;color:#888;text-transform:uppercase;
@@ -342,14 +358,16 @@ with right:
             </div>
         </div>""")
 
-        # Jev Decision — always shows Jev AI badge
+        # Jev Decision
         html(f"""
         <div style="background:{meta['bg']};border:2px solid {meta['color']};
                     border-radius:10px;padding:1.2rem 1.5rem;margin-bottom:12px;">
             <div style="font-size:10px;color:#888;text-transform:uppercase;
                         letter-spacing:1px;margin-bottom:6px;">
                 Routing Decision
-                <span style="font-size:11px;color:#86BC25;margin-left:10px;">&#9679; Jev AI</span>
+                <span style="font-size:11px;color:#86BC25;margin-left:10px;">
+                    &#9679; Jev AI
+                </span>
             </div>
             <div style="font-size:26px;font-weight:800;color:{meta['color']};">
                 {meta['icon']} &nbsp;{meta['label']}
