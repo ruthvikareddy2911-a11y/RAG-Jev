@@ -90,7 +90,6 @@ class JevResult:
     human_readable_match: str
     is_critical: float
     match_quality: float
-    payload: dict = field(default_factory=dict)
 
 def call_jev(raw_error: str, best: dict) -> JevResult:
     payload = {
@@ -130,6 +129,55 @@ def call_jev(raw_error: str, best: dict) -> JevResult:
     except Exception as e:
         return JevResult("NEEDS_MORE_INFO", 0.0, "unknown", "unknown", "none", str(e), 0.0, 0.0)
 
+# ── HTML helpers — all isolated so Streamlit never escapes them ──
+
+def html(content: str):
+    """Shorthand — always renders with unsafe_allow_html."""
+    st.markdown(content, unsafe_allow_html=True)
+
+def card(content: str, border_color: str = "#86BC25"):
+    html(f"""
+    <div style="background:white;border-left:5px solid {border_color};border-radius:10px;
+                padding:1.2rem 1.5rem;margin-bottom:12px;
+                box-shadow:0 2px 6px rgba(0,0,0,0.05);">
+        {content}
+    </div>""")
+
+def step_card(step: str, title: str, body: str):
+    html(f"""
+    <div style="background:white;border-radius:10px;padding:14px 16px;
+                margin-bottom:10px;box-shadow:0 2px 6px rgba(0,0,0,0.05);">
+        <span style="background:#282728;color:#86BC25;border-radius:20px;
+                     padding:2px 10px;font-size:11px;font-weight:700;">{step}</span>
+        <div style="font-size:13px;font-weight:600;color:#282728;margin:6px 0;">{title}</div>
+        {body}
+    </div>""")
+
+def sim_bar(err_id, text, score, is_top):
+    pct   = int(score * 100)
+    color = "#86BC25" if is_top else "#d0d0d0"
+    badge = '<span style="background:#86BC25;color:white;font-size:10px;padding:1px 6px;border-radius:4px;font-weight:700;margin-left:6px;">TOP</span>' if is_top else ""
+    html(f"""
+    <div style="margin-bottom:10px;">
+        <div style="font-size:12px;color:#555;margin-bottom:3px;">
+            [{err_id}] {text[:55]}...{badge}
+        </div>
+        <div style="background:#eee;border-radius:6px;height:10px;width:100%;overflow:hidden;">
+            <div style="background:{color};width:{pct}%;height:10px;border-radius:6px;
+                        transition:width 0.5s ease;"></div>
+        </div>
+        <div style="font-size:11px;color:#888;margin-top:2px;">{score:.4f}</div>
+    </div>""")
+
+def metric_tile(label, value, color="#1a1a1a"):
+    html(f"""
+    <div style="background:white;border-radius:10px;padding:14px;text-align:center;
+                box-shadow:0 2px 6px rgba(0,0,0,0.05);">
+        <div style="font-size:10px;color:#888;text-transform:uppercase;
+                    letter-spacing:1px;margin-bottom:4px;">{label}</div>
+        <div style="font-size:26px;font-weight:800;color:{color};">{value}</div>
+    </div>""")
+
 # ── Page Config ────────────────────────────────────────────
 
 st.set_page_config(page_title="SAP DRC | Error Translator", page_icon="🧾", layout="wide")
@@ -137,45 +185,9 @@ st.set_page_config(page_title="SAP DRC | Error Translator", page_icon="🧾", la
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;600;700;800&display=swap');
-
 html, body, [class*="css"] { font-family: 'Open Sans', sans-serif; }
-
 .main { background: #f4f5f7; }
 .block-container { padding: 0 2rem 2rem; max-width: 1200px; }
-
-/* Hide default Streamlit header decoration */
-header[data-testid="stHeader"] { background: transparent; }
-
-.drc-header {
-    background: linear-gradient(135deg, #1a1a1a 0%, #282728 100%);
-    padding: 1.5rem 2rem; border-radius: 12px;
-    margin-bottom: 1.5rem; display: flex;
-    align-items: center; justify-content: space-between;
-}
-.drc-header-left h1 {
-    color: white; font-size: 24px; font-weight: 800; margin: 0;
-}
-.drc-header-left h1 span { color: #86BC25; }
-.drc-header-left p { color: #aaa; font-size: 13px; margin: 4px 0 0; }
-.drc-badge {
-    background: #86BC25; color: white;
-    padding: 6px 14px; border-radius: 20px;
-    font-size: 12px; font-weight: 700;
-}
-
-.section-label {
-    font-size: 11px; font-weight: 700; color: #888;
-    text-transform: uppercase; letter-spacing: 1.5px;
-    margin-bottom: 8px;
-}
-
-.input-card {
-    background: white; border-radius: 12px;
-    padding: 1.5rem; box-shadow: 0 2px 8px rgba(0,0,0,0.06);
-    margin-bottom: 1rem;
-}
-
-/* Translate button */
 .stButton > button {
     background: #86BC25 !important; color: white !important;
     font-weight: 700 !important; font-size: 15px !important;
@@ -184,218 +196,169 @@ header[data-testid="stHeader"] { background: transparent; }
     transition: background 150ms;
 }
 .stButton > button:hover { background: #6B9A1E !important; }
-
-/* Metric tiles */
-.metric-tile {
-    background: white; border-radius: 10px;
-    padding: 14px 16px; text-align: center;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-}
-.metric-tile .m-label { font-size: 11px; color: #888; text-transform: uppercase; letter-spacing: 1px; }
-.metric-tile .m-value { font-size: 26px; font-weight: 800; color: #1a1a1a; }
-
-/* Result cards */
-.result-card {
-    background: white; border-radius: 10px;
-    padding: 1.2rem 1.5rem; margin-bottom: 12px;
-    box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-    border-left: 5px solid #86BC25;
-}
-
-/* Step pills */
-.step-pill {
-    display: inline-block; background: #282728; color: #86BC25;
-    border-radius: 20px; padding: 2px 10px;
-    font-size: 11px; font-weight: 700; margin-bottom: 6px;
-}
-
-/* Keyword tags */
-.kw-tag {
-    display: inline-block; background: #f0f8e8;
-    border: 1px solid #86BC25; border-radius: 6px;
-    padding: 3px 10px; margin: 2px;
-    font-size: 12px; color: #282728;
-}
-
-/* Similarity bar */
-.sim-row { margin-bottom: 10px; }
-.sim-label { font-size: 12px; color: #555; margin-bottom: 3px; }
-.sim-bar-bg {
-    background: #eee; border-radius: 6px; height: 10px;
-    width: 100%; overflow: hidden;
-}
-.sim-bar-fill {
-    height: 10px; border-radius: 6px;
-    transition: width 0.5s ease;
-}
-.sim-score { font-size: 11px; color: #888; margin-top: 2px; }
-
 div[data-testid="stSelectbox"] label,
 div[data-testid="stTextArea"] label {
-    font-size: 12px !important; font-weight: 600 !important;
-    color: #555 !important; text-transform: uppercase;
-    letter-spacing: 1px !important;
+    font-size: 11px !important; font-weight: 700 !important;
+    color: #888 !important; text-transform: uppercase; letter-spacing: 1px !important;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ── Header ─────────────────────────────────────────────────
 
-st.markdown("""
-<div class="drc-header">
-    <div class="drc-header-left">
-        <h1><span>SAP DRC</span> &nbsp;Error Translation &amp; Routing</h1>
-        <p>Powered by RAG Vector Engine + Jev AI Model</p>
+html("""
+<div style="background:linear-gradient(135deg,#1a1a1a 0%,#282728 100%);
+            padding:1.5rem 2rem;border-radius:12px;margin-bottom:1.5rem;
+            display:flex;align-items:center;justify-content:space-between;">
+    <div>
+        <div style="color:white;font-size:22px;font-weight:800;">
+            <span style="color:#86BC25;">SAP DRC</span> &nbsp;Error Translation &amp; Routing
+        </div>
+        <div style="color:#aaa;font-size:12px;margin-top:4px;">
+            Powered by RAG Vector Engine + Jev AI Model
+        </div>
     </div>
-    <div class="drc-badge">&#9679; Live</div>
-</div>
-""", unsafe_allow_html=True)
+    <div style="background:#86BC25;color:white;padding:6px 16px;
+                border-radius:20px;font-size:12px;font-weight:700;">
+        &#9679; Live
+    </div>
+</div>""")
 
 # ── Layout ─────────────────────────────────────────────────
 
 left, right = st.columns([1, 1.1], gap="large")
 
 with left:
-    st.markdown('<div class="section-label">Input</div>', unsafe_allow_html=True)
-    with st.container():
-        selected  = st.selectbox("Sample Errors", ["— type your own —"] + SAMPLE_ERRORS)
-        default   = "" if selected == "— type your own —" else selected
-        raw_error = st.text_area("Raw SAP DRC Error String", value=default, height=90,
-                                  placeholder="e.g. BR-KSA-05: Buyer VAT missing...")
-        run = st.button("⚡  Translate & Route", use_container_width=True)
+    html('<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">Input</div>')
+    selected  = st.selectbox("Sample Errors", ["— type your own —"] + SAMPLE_ERRORS)
+    default   = "" if selected == "— type your own —" else selected
+    raw_error = st.text_area("Raw SAP DRC Error String", value=default, height=90,
+                              placeholder="e.g. BR-KSA-05: Buyer VAT missing...")
+    run = st.button("⚡  Translate & Route", use_container_width=True)
 
     if run and raw_error.strip():
         candidates = semantic_search(raw_error)
-        best       = candidates[0]
-        hits       = get_keyword_hits(raw_error)
-        vec        = get_embedding(raw_error)
-        dims       = list(KEYWORD_SIGNALS.keys())
+        best = candidates[0]
+        hits = get_keyword_hits(raw_error)
+        vec  = get_embedding(raw_error)
+        dims = list(KEYWORD_SIGNALS.keys())
 
-        st.markdown('<div class="section-label" style="margin-top:1rem;">Vector Translation Process</div>', unsafe_allow_html=True)
+        html('<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:1.5px;margin:16px 0 8px;">Vector Translation Process</div>')
 
         # Step 1 — Keywords
-        kw_tags = "".join(
-            f'<span class="kw-tag"><b>{dim}</b>: {", ".join(words)}</span>'
+        kw_tags = " ".join(
+            f'<span style="display:inline-block;background:#f0f8e8;border:1px solid #86BC25;'
+            f'border-radius:6px;padding:3px 10px;margin:2px;font-size:12px;">'
+            f'<b>{dim}</b>: {", ".join(words)}</span>'
             for dim, words in hits.items()
         ) if hits else '<span style="color:#aaa;font-size:12px;">No strong signals detected</span>'
-
-        st.markdown(f"""
-        <div style="background:white;border-radius:10px;padding:14px 16px;margin-bottom:10px;box-shadow:0 2px 6px rgba(0,0,0,0.05);">
-            <div class="step-pill">Step 1</div>
-            <div style="font-size:13px;font-weight:600;color:#282728;margin-bottom:6px;">Keywords Detected</div>
-            {kw_tags}
-        </div>""", unsafe_allow_html=True)
+        step_card("Step 1", "Keywords Detected", kw_tags)
 
         # Step 2 — Vector
-        vec_cells = "".join([f"""
-            <div style="flex:1;background:#f5f5f5;border-radius:8px;padding:10px;text-align:center;margin:0 4px;">
-                <div style="font-size:10px;color:#888;text-transform:uppercase;letter-spacing:1px;">{dims[i]}</div>
-                <div style="font-size:20px;font-weight:800;color:#282728;">{vec[i]:.3f}</div>
-            </div>""" for i in range(4)])
+        vec_cells = "".join([
+            f'<div style="flex:1;background:#f5f5f5;border-radius:8px;padding:10px;'
+            f'text-align:center;margin:0 4px;">'
+            f'<div style="font-size:10px;color:#888;text-transform:uppercase;">{dims[i]}</div>'
+            f'<div style="font-size:20px;font-weight:800;color:#282728;">{vec[i]:.3f}</div>'
+            f'</div>'
+            for i in range(4)
+        ])
+        step_card("Step 2", "Input Vector (4D)",
+                  f'<div style="display:flex;gap:4px;">{vec_cells}</div>')
 
-        st.markdown(f"""
-        <div style="background:white;border-radius:10px;padding:14px 16px;margin-bottom:10px;box-shadow:0 2px 6px rgba(0,0,0,0.05);">
-            <div class="step-pill">Step 2</div>
-            <div style="font-size:13px;font-weight:600;color:#282728;margin-bottom:10px;">Input Vector (4D)</div>
-            <div style="display:flex;">{vec_cells}</div>
-        </div>""", unsafe_allow_html=True)
-
-        # Step 3 — Similarity Bars
-        bars = ""
+        # Step 3 — Similarity Bars (each bar rendered individually)
+        html("""
+        <div style="background:white;border-radius:10px;padding:14px 16px;
+                    box-shadow:0 2px 6px rgba(0,0,0,0.05);">
+            <span style="background:#282728;color:#86BC25;border-radius:20px;
+                         padding:2px 10px;font-size:11px;font-weight:700;">Step 3</span>
+            <div style="font-size:13px;font-weight:600;color:#282728;margin:6px 0 10px;">
+                Similarity Scores
+            </div>
+        """)
         for entry in candidates[:5]:
-            pct   = int(entry["score"] * 100)
-            is_top = entry["err_id"] == best["err_id"]
-            fill  = "#86BC25" if is_top else "#d0d0d0"
-            top_label = ' &nbsp;<span style="background:#86BC25;color:white;font-size:10px;padding:1px 6px;border-radius:4px;font-weight:700;">TOP</span>' if is_top else ""
-            bars += f"""
-            <div class="sim-row">
-                <div class="sim-label">[{entry['err_id']}] {entry['text'][:52]}...{top_label}</div>
-                <div class="sim-bar-bg">
-                    <div class="sim-bar-fill" style="width:{pct}%;background:{fill};"></div>
-                </div>
-                <div class="sim-score">{entry['score']:.4f}</div>
-            </div>"""
-
-        st.markdown(f"""
-        <div style="background:white;border-radius:10px;padding:14px 16px;box-shadow:0 2px 6px rgba(0,0,0,0.05);">
-            <div class="step-pill">Step 3</div>
-            <div style="font-size:13px;font-weight:600;color:#282728;margin-bottom:10px;">Similarity Scores</div>
-            {bars}
-        </div>""", unsafe_allow_html=True)
+            sim_bar(entry["err_id"], entry["text"], entry["score"],
+                    entry["err_id"] == best["err_id"])
+        html("</div>")
 
         st.session_state["candidates"] = candidates
         st.session_state["raw_error"]  = raw_error
         st.session_state["jev_result"] = call_jev(raw_error, best)
 
 with right:
-    st.markdown('<div class="section-label">Result</div>', unsafe_allow_html=True)
+    html('<div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;">Result</div>')
 
     if "jev_result" in st.session_state:
         result = st.session_state["jev_result"]
         meta   = DECISION_META.get(result.decision, DECISION_META["NEEDS_MORE_INFO"])
 
-        # Raw vs Translated
-        st.markdown(f"""
-        <div style="background:white;border-radius:10px;padding:1.2rem 1.5rem;margin-bottom:12px;box-shadow:0 2px 6px rgba(0,0,0,0.05);">
-            <div style="display:flex;gap:16px;align-items:flex-start;">
-                <div style="flex:1;border-right:1px solid #eee;padding-right:16px;">
-                    <div class="section-label" style="margin-bottom:4px;">Raw SAP Error</div>
-                    <div style="font-family:monospace;font-size:12px;color:#555;line-height:1.5;">{st.session_state['raw_error']}</div>
-                </div>
-                <div style="flex:1;padding-left:4px;">
-                    <div class="section-label" style="margin-bottom:4px;">&#8594; Translation</div>
-                    <div style="font-size:14px;font-weight:600;color:#1a1a1a;line-height:1.5;">{result.human_readable_match}</div>
-                    <div style="margin-top:8px;">
-                        <span style="background:#f5f5f5;border-radius:4px;padding:2px 8px;font-size:11px;color:#555;">
-                            {result.error_category.replace('_',' ').title()}
-                        </span>
-                        &nbsp;
-                        <span style="background:#f5f5f5;border-radius:4px;padding:2px 8px;font-size:11px;color:#555;">
-                            {result.matched_err_id}
-                        </span>
-                    </div>
+        # Raw vs Translated side by side
+        card(f"""
+        <div style="display:flex;gap:16px;">
+            <div style="flex:1;border-right:1px solid #eee;padding-right:16px;">
+                <div style="font-size:10px;color:#888;text-transform:uppercase;
+                            letter-spacing:1px;margin-bottom:6px;">Raw SAP Error</div>
+                <div style="font-family:monospace;font-size:12px;color:#555;line-height:1.6;">
+                    {st.session_state['raw_error']}
                 </div>
             </div>
-        </div>""", unsafe_allow_html=True)
+            <div style="flex:1;">
+                <div style="font-size:10px;color:#888;text-transform:uppercase;
+                            letter-spacing:1px;margin-bottom:6px;">&#8594; Translation</div>
+                <div style="font-size:14px;font-weight:600;color:#1a1a1a;line-height:1.6;">
+                    {result.human_readable_match}
+                </div>
+                <div style="margin-top:8px;">
+                    <span style="background:#f0f8e8;border:1px solid #86BC25;border-radius:4px;
+                                 padding:2px 8px;font-size:11px;color:#555;">
+                        {result.error_category.replace('_', ' ').title()}
+                    </span>
+                    &nbsp;
+                    <span style="background:#f5f5f5;border-radius:4px;
+                                 padding:2px 8px;font-size:11px;color:#555;">
+                        {result.matched_err_id}
+                    </span>
+                </div>
+            </div>
+        </div>""")
 
         # Jev Decision
-        st.markdown(f"""
-        <div style="background:{meta['bg']};border:2px solid {meta['color']};border-radius:10px;
-                    padding:1.2rem 1.5rem;margin-bottom:12px;">
-            <div class="section-label" style="margin-bottom:4px;">Jev Routing Decision</div>
+        html(f"""
+        <div style="background:{meta['bg']};border:2px solid {meta['color']};
+                    border-radius:10px;padding:1.2rem 1.5rem;margin-bottom:12px;">
+            <div style="font-size:10px;color:#888;text-transform:uppercase;
+                        letter-spacing:1px;margin-bottom:6px;">Jev Routing Decision</div>
             <div style="font-size:26px;font-weight:800;color:{meta['color']};">
                 {meta['icon']} &nbsp;{meta['label']}
             </div>
-        </div>""", unsafe_allow_html=True)
+        </div>""")
 
         # Score Tiles
         c1, c2, c3 = st.columns(3)
-        for col, label, value, color in [
-            (c1, "Confidence",       f"{int(result.confidence  * 100)}%", "#282728"),
-            (c2, "Compliance Risk",  f"{int(result.is_critical * 100)}%",
-                "#DA291C" if result.is_critical >= 0.8 else "#E8A317" if result.is_critical >= 0.5 else "#86BC25"),
-            (c3, "Match Quality",    f"{int(result.match_quality * 100)}%", "#282728"),
-        ]:
-            col.markdown(f"""
-            <div class="metric-tile">
-                <div class="m-label">{label}</div>
-                <div class="m-value" style="color:{color};">{value}</div>
-            </div>""", unsafe_allow_html=True)
+        risk_color = (
+            "#DA291C" if result.is_critical >= 0.8
+            else "#E8A317" if result.is_critical >= 0.5
+            else "#86BC25"
+        )
+        with c1: metric_tile("Confidence",      f"{int(result.confidence   * 100)}%")
+        with c2: metric_tile("Compliance Risk",  f"{int(result.is_critical  * 100)}%", risk_color)
+        with c3: metric_tile("Match Quality",    f"{int(result.match_quality* 100)}%")
 
-        # Banner
         st.markdown("<div style='margin-top:12px;'></div>", unsafe_allow_html=True)
         if result.is_critical >= 0.8:
-            st.error("🚨 **Invoice rejection risk** — this error must be resolved before submission to the tax authority.")
+            st.error("🚨 **Invoice rejection risk** — resolve before submission to the tax authority.")
         elif result.is_critical >= 0.5:
             st.warning("⚠️ **Compliance risk detected** — review recommended before submission.")
         else:
             st.success("✅ **Low compliance risk** — standard processing applies.")
 
     else:
-        st.markdown("""
-        <div style="background:white;border-radius:10px;padding:3rem 2rem;text-align:center;
-                    box-shadow:0 2px 6px rgba(0,0,0,0.05);color:#aaa;">
+        html("""
+        <div style="background:white;border-radius:10px;padding:3rem 2rem;
+                    text-align:center;box-shadow:0 2px 6px rgba(0,0,0,0.05);">
             <div style="font-size:40px;margin-bottom:12px;">🧾</div>
-            <div style="font-size:15px;font-weight:600;">No error analysed yet</div>
-            <div style="font-size:13px;margin-top:4px;">Enter a SAP DRC error on the left and click Translate & Route</div>
-        </div>""", unsafe_allow_html=True)
+            <div style="font-size:15px;font-weight:600;color:#555;">No error analysed yet</div>
+            <div style="font-size:13px;color:#aaa;margin-top:4px;">
+                Enter a SAP DRC error on the left and click Translate &amp; Route
+            </div>
+        </div>""")
